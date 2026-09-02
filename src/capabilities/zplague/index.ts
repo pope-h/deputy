@@ -59,8 +59,15 @@ async function findAndJoin(
   const res = await fetch(`${opts.apiBase}/api/rooms`).catch(() => null)
   if (!res?.ok) return { kind: 'failed', detail: 'room discovery unavailable' }
 
-  const body = (await res.json()) as { rooms?: { roomId: string; stakeAmount?: string }[] }
+  const body = (await res.json()) as {
+    rooms?: { roomId: string; stakeAmount?: string; contractAddress?: string; chainId?: number }[]
+  }
+  const want = opts.contract.toLowerCase()
   const candidates = (body.rooms ?? []).filter(r => {
+    // The lobby can carry rooms from another deployment (a testnet contract, or
+    // a previous address). Joining one would burn gas on a revert at best, so
+    // match the contract explicitly rather than trusting the list.
+    if ((r.contractAddress ?? '').toLowerCase() !== want) return false
     const stake = BigInt(r.stakeAmount ?? '0')
     return stake > 0n && stake <= opts.maxStakeWei
   })
