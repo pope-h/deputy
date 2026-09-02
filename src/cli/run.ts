@@ -42,6 +42,9 @@ if (process.env.ZPLAGUE_CONTRACT) {
     dailyLossCapWei: BigInt(process.env.ZPLAGUE_DAILY_LOSS_CAP_WEI ?? '50000000000000000'), // 0.05 USDm
     proofCachePath: process.env.ZPLAGUE_PROOF_CACHE ?? './data/role-proof.json',
     voteTimeoutMs: Number(process.env.ZPLAGUE_VOTE_TIMEOUT_MS ?? 25_000),
+    // Seat + daily count survive a restart. Without this a restart abandons a
+    // staked seat and resets the games-per-day cap to zero.
+    statePath: process.env.ZPLAGUE_STATE ?? './data/zplague-state.json',
   }))
 }
 

@@ -23,6 +23,7 @@ import { txOpts } from '../../core/config.js'
 import { newBudget, budgetExceeded, rollBudget, DAY_MS, type Budget } from '../../wallet/guards.js'
 import { GAME_ABI, ERC20_ABI, STATUS, PHASE, PLAYER } from './abi.js'
 import { loadRoleProof } from './zk.js'
+import { loadState, saveState, type PersistedState, type Seat } from './state.js'
 
 export interface ZplagueOptions {
   /** PlagueGame address. Mainnet: 0xe157fD2564246Afa41cfAFaDA01a9A6f3e082710 */
@@ -46,6 +47,14 @@ export interface ZplagueOptions {
   /** Where the cached role commitment lives. */
   proofCachePath: string
   /**
+   * Where the seat and daily game count are persisted.
+   *
+   * Both used to live only in memory, which made a restart destructive: it
+   * abandoned a staked seat, and reset the daily cap so the limit only ever
+   * bound one process lifetime.
+   */
+  statePath: string
+  /**
    * How long to let the model think before voting randomly instead.
    *
    * The runtime's 8s default is far too tight here: a reasoning model with
@@ -56,14 +65,6 @@ export interface ZplagueOptions {
   voteTimeoutMs: number
 }
 
-interface Seat {
-  roomId: bigint
-  isHost: boolean
-  committed: boolean
-  votedRound: number
-  opponentsRequested: boolean
-}
-
 /** Grace after the voting window closes before nudging resolveRound. */
 const RESOLVE_GRACE_MS = 20_000
 
@@ -71,10 +72,8 @@ const RESOLVE_GRACE_MS = 20_000
 const HOST_ROOM_EXPIRY_SECS = 3600n
 
 export function zplagueCapability(opts: ZplagueOptions): Capability {
-  let seat: Seat | null = null
   let budget: Budget | null = null
-  /** Timestamps of games sat down for, trimmed to a rolling 24h. */
-  let recentGames: number[] = []
+  let state: PersistedState | null = null
 
   return {
     name: 'zplague',
@@ -85,6 +84,22 @@ export function zplagueCapability(opts: ZplagueOptions): Capability {
     },
 
     async tick(ctx: AgentContext): Promise<CapabilityOutcome> {
+      if (!state) {
+        state = await loadState(opts.statePath)
+        if (state.seat) {
+          ctx.log(`zplague: resuming seat in room ${state.seat.roomId} after restart`)
+        }
+      }
+      let lastPersisted = JSON.stringify(state)
+      const persist = async () => {
+        // Only write when something changed. A tick fires every few seconds and
+        // most are idle; rewriting an identical file each time is pure churn.
+        const now = JSON.stringify(state)
+        if (now === lastPersisted) return
+        await saveState(opts.statePath, state!)
+        lastPersisted = now
+      }
+
       const stake = await ctx.publicClient.readContract({
         address: opts.stakeToken, abi: ERC20_ABI, functionName: 'balanceOf',
         args: [ctx.identity.address],
@@ -95,17 +110,25 @@ export function zplagueCapability(opts: ZplagueOptions): Capability {
 
       // Mid-game the seat is already paid for, so a tripped budget must not
       // strand it: finish the game, then stop sitting down for new ones.
-      if (!seat) {
+      if (!state.seat) {
         if (budgetExceeded(budget, stake)) {
           return { kind: 'idle' }
         }
-        recentGames = recentGames.filter(t => Date.now() - t < DAY_MS)
-        if (recentGames.length >= opts.maxGamesPerDay) return { kind: 'idle' }
+        state.recentGames = state.recentGames.filter(t => Date.now() - t < DAY_MS)
+        if (state.recentGames.length >= opts.maxGamesPerDay) return { kind: 'idle' }
 
-        return findSeat(ctx, opts, stake, s => { seat = s; recentGames.push(Date.now()) })
+        return findSeat(ctx, opts, stake, async s => {
+          state!.seat = s
+          state!.recentGames.push(Date.now())
+          // Record BEFORE returning: a crash between staking and persisting
+          // loses the seat we just paid for.
+          await persist()
+        })
       }
 
-      return playSeat(ctx, opts, seat, () => { seat = null })
+      const outcome = await playSeat(ctx, opts, state.seat, () => { state!.seat = null })
+      await persist()
+      return outcome
     },
   }
 }
@@ -113,7 +136,7 @@ export function zplagueCapability(opts: ZplagueOptions): Capability {
 // ── Getting a seat ────────────────────────────────────────────────────────────
 
 async function findSeat(
-  ctx: AgentContext, opts: ZplagueOptions, balance: bigint, take: (s: Seat) => void,
+  ctx: AgentContext, opts: ZplagueOptions, balance: bigint, take: (s: Seat) => Promise<void>,
 ): Promise<CapabilityOutcome> {
   const res = await fetch(`${opts.apiBase}/api/rooms`).catch(() => null)
   if (!res?.ok) return { kind: 'failed', detail: 'room discovery unavailable' }
@@ -136,7 +159,7 @@ async function findSeat(
     const stake = BigInt(open[0].stakeAmount ?? '0')
     await ensureAllowance(ctx, opts, stake)
     await send(ctx, opts.contract, GAME_ABI, 'joinRoom', [roomId])
-    take({ roomId, isHost: false, committed: false, votedRound: 0, opponentsRequested: false })
+    await take({ roomId: roomId.toString(), isHost: false, committed: false, votedRound: 0, opponentsRequested: false })
     return { kind: 'acted', detail: `joined room ${roomId}` }
   }
 
@@ -161,7 +184,7 @@ async function findSeat(
   } as never)
   await ctx.publicClient.waitForTransactionReceipt({ hash })
 
-  take({ roomId, isHost: true, committed: false, votedRound: 0, opponentsRequested: false })
+  await take({ roomId: roomId.toString(), isHost: true, committed: false, votedRound: 0, opponentsRequested: false })
   return { kind: 'acted', detail: `opened room ${roomId} at ${opts.hostStakeWei} wei` }
 }
 
@@ -171,7 +194,7 @@ async function playSeat(
   ctx: AgentContext, opts: ZplagueOptions, seat: Seat, leave: () => void,
 ): Promise<CapabilityOutcome> {
   const room = await ctx.publicClient.readContract({
-    address: opts.contract, abi: GAME_ABI, functionName: 'getRoom', args: [seat.roomId],
+    address: opts.contract, abi: GAME_ABI, functionName: 'getRoom', args: [BigInt(seat.roomId)],
   })
   const status = Number(room.status)
 
@@ -203,7 +226,7 @@ async function waiting(
   if (Date.now() / 1000 >= Number(room.expiresAt)) {
     // Nobody came. expireRoom is permissionless and refunds every stake,
     // including ours — leaving it unclaimed just strands the money.
-    await send(ctx, opts.contract, GAME_ABI, 'expireRoom', [seat.roomId])
+    await send(ctx, opts.contract, GAME_ABI, 'expireRoom', [BigInt(seat.roomId)])
     leave()
     return { kind: 'acted', detail: `room ${seat.roomId} expired with ${players} player(s); stakes refunded` }
   }
@@ -218,7 +241,7 @@ async function waiting(
     const res = await fetch(`${opts.apiBase}/api/bots/add`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roomId: seat.roomId.toString(), count: want }),
+      body: JSON.stringify({ roomId: seat.roomId, count: want }),
     }).catch(() => null)
 
     seat.opponentsRequested = true
@@ -229,7 +252,7 @@ async function waiting(
   }
 
   if (players >= needed) {
-    await send(ctx, opts.contract, GAME_ABI, 'startGame', [seat.roomId])
+    await send(ctx, opts.contract, GAME_ABI, 'startGame', [BigInt(seat.roomId)])
     return { kind: 'acted', detail: `started room ${seat.roomId} with ${players} players` }
   }
 
@@ -246,7 +269,7 @@ async function starting(
   // receipt we missed must not be submitted twice.
   const me = await ctx.publicClient.readContract({
     address: opts.contract, abi: GAME_ABI, functionName: 'getPlayer',
-    args: [seat.roomId, ctx.identity.address],
+    args: [BigInt(seat.roomId), ctx.identity.address],
   })
   if (me.roleCommitted) {
     seat.committed = true
@@ -255,7 +278,7 @@ async function starting(
 
   const { commitment, proofHex } = await loadRoleProof(opts.proofCachePath, opts.apiBase)
   await send(ctx, opts.contract, GAME_ABI, 'submitRoleCommitment',
-    [seat.roomId, commitment, proofHex])
+    [BigInt(seat.roomId), commitment, proofHex])
   seat.committed = true
   return { kind: 'acted', detail: `committed role in room ${seat.roomId}` }
 }
@@ -269,7 +292,7 @@ async function active(
   const round = Number(room.currentRound)
   const states = await Promise.all(room.players.map(p =>
     ctx.publicClient.readContract({
-      address: opts.contract, abi: GAME_ABI, functionName: 'getPlayer', args: [seat.roomId, p],
+      address: opts.contract, abi: GAME_ABI, functionName: 'getPlayer', args: [BigInt(seat.roomId), p],
     })))
 
   const self = ctx.identity.address.toLowerCase()
@@ -282,7 +305,7 @@ async function active(
     if (alive.length === 0) return { kind: 'idle' }
 
     const { target, source } = await chooseTarget(ctx, alive, round, opts.voteTimeoutMs)
-    await send(ctx, opts.contract, GAME_ABI, 'castVote', [seat.roomId, target])
+    await send(ctx, opts.contract, GAME_ABI, 'castVote', [BigInt(seat.roomId), target])
     // Record HOW the vote was decided. A reasoned vote and a fallback vote are
     // indistinguishable on-chain, so without this the claim "the agent reasons"
     // cannot be checked — by a judge, or by us.
@@ -294,7 +317,7 @@ async function active(
   // window having actually closed.
   const closesAt = (Number(room.phaseStartedAt) + Number(room.config.votingDurationSecs)) * 1000
   if (Date.now() > closesAt + RESOLVE_GRACE_MS) {
-    await send(ctx, opts.contract, GAME_ABI, 'resolveRound', [seat.roomId])
+    await send(ctx, opts.contract, GAME_ABI, 'resolveRound', [BigInt(seat.roomId)])
     return { kind: 'acted', detail: `resolved round ${round} in room ${seat.roomId}` }
   }
 
