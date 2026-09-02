@@ -1,0 +1,23 @@
+{
+  "name": "deputy",
+  "version": "0.1.0",
+  "description": "An autonomous on-chain agent with its own identity, wallet, and pluggable capabilities. Built on Celo.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "register": "tsx src/cli/register.ts",
+    "run": "tsx src/cli/run.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.122.0",
+    "@celo/attribution-tags": "^0.3.0",
+    "dotenv": "^16.4.0",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0"
+  }
+}
