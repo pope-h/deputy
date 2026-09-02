@@ -45,6 +45,15 @@ export interface ZplagueOptions {
   dailyLossCapWei: bigint
   /** Where the cached role commitment lives. */
   proofCachePath: string
+  /**
+   * How long to let the model think before voting randomly instead.
+   *
+   * The runtime's 8s default is far too tight here: a reasoning model with
+   * adaptive thinking regularly runs past it, and a timeout still bills for
+   * the tokens while producing a random vote — the worst of both. The voting
+   * phase is 120s, so there is room to actually wait for the answer.
+   */
+  voteTimeoutMs: number
 }
 
 interface Seat {
@@ -272,7 +281,7 @@ async function active(
       Number(s.status) !== PLAYER.Eliminated && s.addr.toLowerCase() !== self)
     if (alive.length === 0) return { kind: 'idle' }
 
-    const target = await chooseTarget(ctx, alive, round)
+    const target = await chooseTarget(ctx, alive, round, opts.voteTimeoutMs)
     await send(ctx, opts.contract, GAME_ABI, 'castVote', [seat.roomId, target])
     return { kind: 'acted', detail: `voted ${target} in round ${round}` }
   }
@@ -301,7 +310,7 @@ interface PlayerView { addr: Address; status: number; voteTarget: Address; hasVo
  * shared information, not an edge bought with an API key.
  */
 async function chooseTarget(
-  ctx: AgentContext, alive: readonly PlayerView[], round: number,
+  ctx: AgentContext, alive: readonly PlayerView[], round: number, timeoutMs: number,
 ): Promise<Address> {
   const fallback = alive[Math.floor(Math.random() * alive.length)].addr
 
@@ -315,7 +324,7 @@ async function chooseTarget(
   const answer = await ctx.reason({
     system: 'You are a player in a staked on-chain social deduction game. Infected players win by surviving; clean players win by voting them out. Reply with ONLY the number of the player you vote to eliminate.',
     user: `Round ${round}. You are ${short(ctx.identity.address)}. Living players and their public votes this round:\n${board}`,
-    timeoutMs: 8_000,
+    timeoutMs,
   })
   if (!answer) return fallback
 

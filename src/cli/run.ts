@@ -37,6 +37,7 @@ if (process.env.ZPLAGUE_CONTRACT) {
     maxGamesPerDay: Number(process.env.ZPLAGUE_MAX_GAMES_PER_DAY ?? 4),
     dailyLossCapWei: BigInt(process.env.ZPLAGUE_DAILY_LOSS_CAP_WEI ?? '50000000000000000'), // 0.05 USDm
     proofCachePath: process.env.ZPLAGUE_PROOF_CACHE ?? './data/role-proof.json',
+    voteTimeoutMs: Number(process.env.ZPLAGUE_VOTE_TIMEOUT_MS ?? 25_000),
   }))
 }
 

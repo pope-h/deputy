@@ -13,7 +13,7 @@
  * and skips the capability rather than killing the process, so a topped-up
  * wallet resumes on its own.
  */
-import type { Address } from 'viem'
+import { parseAbi, type Address } from 'viem'
 import type { AgentPublicClient } from '../core/config.js'
 
 export interface Budget {
@@ -43,12 +43,28 @@ export function rollBudget(b: Budget, current: bigint): Budget {
   return { opening: current, limitWei: b.limitWei, since: Date.now() }
 }
 
-/** True when there is enough native balance to safely start work. */
+const BALANCE_OF = parseAbi([
+  'function balanceOf(address account) external view returns (uint256)',
+])
+
+/**
+ * True when there is enough of whatever this agent actually pays gas with.
+ *
+ * With CIP-64 fee abstraction the agent pays in a stablecoin, and its native
+ * balance is then irrelevant — checking it anyway would strand a perfectly
+ * funded agent below a CELO floor it never needs to cross. So the floor
+ * follows the fee currency when one is configured.
+ */
 export async function hasGas(
-  client: AgentPublicClient, address: Address, floorWei: bigint,
+  client: AgentPublicClient, address: Address, floorWei: bigint, feeCurrency?: Address,
 ): Promise<boolean> {
   try {
-    return (await client.getBalance({ address })) >= floorWei
+    const balance = feeCurrency
+      ? await client.readContract({
+          address: feeCurrency, abi: BALANCE_OF, functionName: 'balanceOf', args: [address],
+        })
+      : await client.getBalance({ address })
+    return balance >= floorWei
   } catch {
     // An RPC that cannot answer is not proof of funds. Refuse rather than
     // start an action the agent may not be able to pay to finish.

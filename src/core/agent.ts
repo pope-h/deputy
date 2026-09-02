@@ -12,7 +12,7 @@
  */
 import type { Address, Hex } from 'viem'
 import type { Capability, AgentContext, AgentIdentity, CapabilityOutcome } from './types.js'
-import { publicClient, walletFor, DATA_SUFFIX, MIN_GAS_WEI } from './config.js'
+import { publicClient, walletFor, DATA_SUFFIX, MIN_GAS_WEI, FEE_CURRENCY } from './config.js'
 import { hasGas } from '../wallet/guards.js'
 import { reason } from '../reason/index.js'
 import { isRegistered } from '../identity/erc8004.js'
@@ -94,9 +94,12 @@ export class Agent {
       // Gas floor is checked once per pass rather than per capability: it is
       // a property of the agent, and re-querying per capability multiplies RPC
       // calls for an answer that cannot differ between them.
-      const funded = await hasGas(publicClient, this.ctx.identity.address, MIN_GAS_WEI)
+      const funded = await hasGas(
+        publicClient, this.ctx.identity.address, MIN_GAS_WEI,
+        FEE_CURRENCY ? (FEE_CURRENCY as Address) : undefined,
+      )
       if (!funded) {
-        this.ctx.log('below gas floor — idling until topped up')
+        this.ctx.log(`below gas floor (${FEE_CURRENCY ? 'fee currency' : 'native CELO'}) — idling until topped up`)
         await sleep(60_000)
         continue
       }
