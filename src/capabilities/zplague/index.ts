@@ -281,9 +281,12 @@ async function active(
       Number(s.status) !== PLAYER.Eliminated && s.addr.toLowerCase() !== self)
     if (alive.length === 0) return { kind: 'idle' }
 
-    const target = await chooseTarget(ctx, alive, round, opts.voteTimeoutMs)
+    const { target, source } = await chooseTarget(ctx, alive, round, opts.voteTimeoutMs)
     await send(ctx, opts.contract, GAME_ABI, 'castVote', [seat.roomId, target])
-    return { kind: 'acted', detail: `voted ${target} in round ${round}` }
+    // Record HOW the vote was decided. A reasoned vote and a fallback vote are
+    // indistinguishable on-chain, so without this the claim "the agent reasons"
+    // cannot be checked — by a judge, or by us.
+    return { kind: 'acted', detail: `voted ${target} in round ${round} [${source}]` }
   }
 
   // Liveness only. resolveRound has NO time gate on-chain, so calling it early
@@ -302,6 +305,9 @@ async function active(
 
 interface PlayerView { addr: Address; status: number; voteTarget: Address; hasVotedThisRound: boolean }
 
+/** How a vote was decided — reported so the claim can be audited. */
+type VoteSource = 'reasoned' | 'fallback:no-model' | 'fallback:unparsable'
+
 /**
  * Reasoned when a model answers, random otherwise. Never blocks on the model.
  *
@@ -311,7 +317,7 @@ interface PlayerView { addr: Address; status: number; voteTarget: Address; hasVo
  */
 async function chooseTarget(
   ctx: AgentContext, alive: readonly PlayerView[], round: number, timeoutMs: number,
-): Promise<Address> {
+): Promise<{ target: Address; source: VoteSource }> {
   const fallback = alive[Math.floor(Math.random() * alive.length)].addr
 
   const board = alive.map((p, i) => {
@@ -326,11 +332,13 @@ async function chooseTarget(
     user: `Round ${round}. You are ${short(ctx.identity.address)}. Living players and their public votes this round:\n${board}`,
     timeoutMs,
   })
-  if (!answer) return fallback
+  if (!answer) return { target: fallback, source: 'fallback:no-model' }
 
   const n = Number(/\d+/.exec(answer)?.[0])
-  if (!Number.isInteger(n) || n < 1 || n > alive.length) return fallback
-  return alive[n - 1].addr
+  if (!Number.isInteger(n) || n < 1 || n > alive.length) {
+    return { target: fallback, source: 'fallback:unparsable' }
+  }
+  return { target: alive[n - 1].addr, source: 'reasoned' }
 }
 
 function short(a: string): string {
