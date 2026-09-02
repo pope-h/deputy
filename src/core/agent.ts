@@ -15,7 +15,7 @@ import type { Capability, AgentContext, AgentIdentity, CapabilityOutcome } from 
 import { publicClient, walletFor, DATA_SUFFIX, MIN_GAS_WEI } from './config.js'
 import { hasGas } from '../wallet/guards.js'
 import { reason } from '../reason/index.js'
-import { existingAgentId } from '../identity/erc8004.js'
+import { isRegistered } from '../identity/erc8004.js'
 
 /** Backoff after a capability fails, doubling to a ceiling. */
 const BACKOFF_BASE_MS = 15_000
@@ -60,14 +60,27 @@ export class Agent {
   get address(): Address { return this.ctx.identity.address }
   get context(): AgentContext { return this.ctx }
 
-  /** Resolve the on-chain id, if this address has been registered. */
+  /**
+   * Confirm this wallet holds an ERC-8004 identity.
+   *
+   * The registry has no address → agentId getter, so the id itself must come
+   * from config (it is returned once, by register()). balanceOf answers the
+   * part that can be checked on-chain.
+   */
   async loadIdentity(): Promise<void> {
-    const id = await existingAgentId(publicClient, this.ctx.identity.address)
-    if (id) {
-      this.ctx.identity.agentId = id
-      this.ctx.log(`ERC-8004 agent #${id}`)
-    } else {
-      this.ctx.log('not registered on ERC-8004 — run `npm run register`')
+    const configured = process.env.AGENT_ID
+    try {
+      const registered = await isRegistered(publicClient, this.ctx.identity.address)
+      if (registered) {
+        this.ctx.identity.agentId = configured
+        this.ctx.log(configured ? `ERC-8004 agent #${configured}` : 'ERC-8004 identity held (set AGENT_ID to name it)')
+      } else {
+        this.ctx.log('no ERC-8004 identity — run `npm run register`')
+      }
+    } catch (err) {
+      // Distinguish a failed read from an absent identity. Reporting an RPC
+      // error as "not registered" is how a duplicate mint starts.
+      this.ctx.log(`identity check failed (${err instanceof Error ? err.message : String(err)}) — continuing`)
     }
   }
 

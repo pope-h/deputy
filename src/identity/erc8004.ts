@@ -14,7 +14,13 @@ export const IDENTITY_REGISTRY: Address = '0x8004A169FB4a3325136EB29fA0ceB6D2e53
 
 const ABI = parseAbi([
   'function register(string agentURI) external returns (uint256 agentId)',
-  'function agentIdOf(address owner) external view returns (uint256)',
+  // The registry is an ERC-721 but NOT enumerable: tokenOfOwnerByIndex reverts,
+  // and there is no agentOf/agentIdOf getter (both revert on mainnet — verified
+  // against 0x8004…a432). So there is NO on-chain address → agentId lookup.
+  // balanceOf answers the question that actually matters — does this address
+  // hold an agent identity — and it works for any address, not just ours.
+  'function balanceOf(address owner) external view returns (uint256)',
+  'function ownerOf(uint256 agentId) external view returns (address)',
 ])
 
 export interface AgentMetadata {
@@ -41,16 +47,27 @@ export function buildAgentUri(meta: AgentMetadata): string {
   return `data:application/json;base64,${Buffer.from(JSON.stringify(doc)).toString('base64')}`
 }
 
-export async function existingAgentId(
+/** True when this address holds an ERC-8004 agent identity. */
+export async function isRegistered(
   client: AgentPublicClient, owner: Address,
-): Promise<string | undefined> {
+): Promise<boolean> {
+  const balance = await client.readContract({
+    address: IDENTITY_REGISTRY, abi: ABI, functionName: 'balanceOf', args: [owner],
+  })
+  return balance > 0n
+}
+
+/** Confirm a known agent id belongs to this address. */
+export async function ownsAgent(
+  client: AgentPublicClient, owner: Address, agentId: string,
+): Promise<boolean> {
   try {
-    const id = await client.readContract({
-      address: IDENTITY_REGISTRY, abi: ABI, functionName: 'agentIdOf', args: [owner],
+    const holder = await client.readContract({
+      address: IDENTITY_REGISTRY, abi: ABI, functionName: 'ownerOf', args: [BigInt(agentId)],
     })
-    return id && id > 0n ? id.toString() : undefined
+    return holder.toLowerCase() === owner.toLowerCase()
   } catch {
-    return undefined
+    return false
   }
 }
 
@@ -63,9 +80,14 @@ export async function register(
   const account = walletClient.account
   if (!account) throw new Error('walletClient has no account')
 
-  const existing = await existingAgentId(publicClient, account.address)
-  if (existing) {
-    return { agentId: existing, hash: '0x' as Hex }
+  // Guard against a duplicate mint. This MUST NOT be a swallowed try/catch: a
+  // failed read is not evidence of "not registered", and treating it as such
+  // mints a second identity for a wallet that already has one.
+  if (await isRegistered(publicClient, account.address)) {
+    throw new Error(
+      `${account.address} already holds an ERC-8004 identity. ` +
+      'Registering again would mint a duplicate. Pass AGENT_ID to use the existing one.',
+    )
   }
 
   const uri = buildAgentUri(meta)
