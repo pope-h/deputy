@@ -86,6 +86,29 @@ npm run run
 Configure capabilities by setting their env vars; unset means the capability is not
 loaded. See `.env.example`.
 
+### Running more than one
+
+A Deputy process is exactly one wallet and one identity, and that is deliberate:
+an ERC-8004 identity is bound to an address, so an agent sharing a wallet with
+seven others is a pool, not an agent. Anyone pointing at it later could not tell
+which of them did the thing.
+
+Running several is just running the process several times, one env file each:
+
+```bash
+AGENT_NAME=deputy-1 AGENT_PRIVATE_KEY=0x… AGENT_ID=9232 npm run run
+AGENT_NAME=deputy-2 AGENT_PRIVATE_KEY=0x… AGENT_ID=9240 npm run run
+```
+
+They share nothing — no coordinator, no queue, no common state — so they can sit
+at the same table without any of them knowing the others are Deputies. They
+compete. Nothing in the runtime treats a fellow Deputy as an ally, and the
+zplague capability cannot: it reads the player list from the contract, which
+carries addresses and no affiliation.
+
+Each instance needs its own gas and its own stake. `AGENT_ID` is optional and
+only labels the logs — identity is proven by the wallet, not the variable.
+
 ## Status
 
 Early. The core, both capabilities, and ERC-8004 registration are implemented and
