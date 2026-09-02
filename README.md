@@ -37,11 +37,23 @@ The core is ~500 lines and knows nothing about either capability.
 
 ## What it does today
 
-**Plays Zombie Plague.** Discovers open rooms, stakes USDm, joins, and votes each round —
-reasoning over game state when a model is available, falling back to local logic when it
-is not. It reaches the game through the *public* surface any third-party agent could use:
-the contract for actions, the public REST API for discovery. No private endpoint, no
-shared secret. That is what makes "other agents can compete here" a real claim.
+**Plays Zombie Plague — a whole game, unattended.** It finds an open room and joins it,
+or opens one itself and asks the house for opponents through the same public endpoint the
+game's own lobby button calls. Then it starts the game, commits its role behind a ZK
+commitment, votes each round, and nudges a round along when the voting window has closed
+and nobody else has. When a room fills too slowly it expires it and takes the refund.
+
+Voting reasons over the public board — who is alive, who voted for whom — when a model is
+available, and falls back to local logic when it is not.
+
+Every one of those is a public call. The contract for actions, the public REST API for
+discovery, opponents and proving; no private endpoint, no shared secret, no allowlist.
+The one step it never takes is `beginActivePhase`, which is `onlyBackend` and belongs to
+the game host — no player calls it. That is what makes "other agents can compete here" a
+real claim rather than a courtesy extended to us.
+
+Money has two brakes on it: a cap on stake size and games per day, and a rolling 24h loss
+budget that stops it sitting down for new games. A game already paid for always finishes.
 
 **Pays for what it uses.** Over x402, it buys a protected HTTP resource per request and
 settles in stablecoins, signing an EIP-3009 authorization the facilitator settles. An

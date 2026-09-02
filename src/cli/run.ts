@@ -20,10 +20,23 @@ if (!PRIVATE_KEY) {
 const capabilities = []
 
 if (process.env.ZPLAGUE_CONTRACT) {
+  const maxStake = BigInt(process.env.ZPLAGUE_MAX_STAKE_WEI ?? '10000000000000000') // 0.01 USDm
   capabilities.push(zplagueCapability({
     contract: process.env.ZPLAGUE_CONTRACT as Address,
+    // USDm (cUSD) on Celo mainnet — the only asset the game stakes.
+    stakeToken: (process.env.ZPLAGUE_STAKE_TOKEN
+      ?? '0x765DE816845861e75A25fCA122bb6898B8B1282a') as Address,
     apiBase: process.env.ZPLAGUE_API ?? 'https://api.zplague.xyz',
-    maxStakeWei: BigInt(process.env.ZPLAGUE_MAX_STAKE_WEI ?? '10000000000000000'),
+    maxStakeWei: maxStake,
+    // Hosting spends money without being asked to, so it is opt-in. An agent
+    // that stakes on its first run because someone cloned the repo and set a
+    // key is not a good default, however autonomous it is meant to be.
+    hostWhenEmpty: process.env.ZPLAGUE_HOST_WHEN_EMPTY === 'true',
+    hostStakeWei: BigInt(process.env.ZPLAGUE_HOST_STAKE_WEI ?? maxStake.toString()),
+    hostMaxPlayers: Number(process.env.ZPLAGUE_HOST_MAX_PLAYERS ?? 4),
+    maxGamesPerDay: Number(process.env.ZPLAGUE_MAX_GAMES_PER_DAY ?? 4),
+    dailyLossCapWei: BigInt(process.env.ZPLAGUE_DAILY_LOSS_CAP_WEI ?? '50000000000000000'), // 0.05 USDm
+    proofCachePath: process.env.ZPLAGUE_PROOF_CACHE ?? './data/role-proof.json',
   }))
 }
 
