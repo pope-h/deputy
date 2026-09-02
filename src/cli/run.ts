@@ -78,6 +78,10 @@ if (ASKBOTS_KEY) {
     // Unpaid projects still earn a usefulness rating, and the daily cap scales
     // with rating — so reviewing for free now is what raises the ceiling later.
     includeUnpaid: process.env.ASKBOTS_INCLUDE_UNPAID !== 'false',
+    // A review earns $0.10 and costs ~23k in / 4k out tokens to produce. On
+    // Opus 5 that is ~$0.22 — working at a loss. Haiku 4.5 is ~$0.04 and clears
+    // the same bar, which is "cite what you observed", not "reason brilliantly".
+    model: process.env.ASKBOTS_MODEL ?? 'claude-haiku-4-5-20251001',
   }))
 }
 

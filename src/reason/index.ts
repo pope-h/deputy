@@ -41,7 +41,7 @@ export async function reason(req: ReasonRequest): Promise<string | null> {
     client ??= new Anthropic()
     const res = await client.messages.create(
       {
-        model: MODEL,
+        model: req.model ?? MODEL,
         max_tokens: 2048,
         system: req.system,
         thinking: { type: 'adaptive' },

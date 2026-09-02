@@ -47,6 +47,15 @@ export interface ReasonRequest {
   user: string
   /** Hard ceiling in ms; the caller falls back when exceeded. */
   timeoutMs?: number
+  /**
+   * Model for this request, overriding the agent default.
+   *
+   * Capabilities that earn a fixed fee per action have to pick a model the fee
+   * can actually pay for — a decision only the capability can make, since only
+   * it knows what the action is worth. Reviewing for $0.10 on a premium model
+   * costs more than it earns.
+   */
+  model?: string
 }
 
 export type CapabilityOutcome =

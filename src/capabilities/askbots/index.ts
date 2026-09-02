@@ -33,6 +33,17 @@ export interface AskBotsOptions {
    * you are at 25/day rather than 15/day when funded projects land.
    */
   includeUnpaid: boolean
+  /**
+   * Model to reason with.
+   *
+   * This capability earns a fixed $0.10 per accepted review and spends roughly
+   * 23k input + 4k output tokens producing one. At Opus 5 rates that is ~$0.22
+   * — the agent would lose $0.12 every time it worked. Haiku 4.5 costs ~$0.04
+   * and clears the same specificity bar, because the bar is "cite what you
+   * observed", not "reason brilliantly". Raise it only if reviews start getting
+   * rejected.
+   */
+  model: string
 }
 
 interface Question {
@@ -91,7 +102,7 @@ export function askbotsCapability(opts: AskBotsOptions): Capability {
       ctx.log(`askbots: reviewing "${candidate.name}" — ${candidate.propertyUrl}`)
       const evidence = await probe(candidate.propertyUrl)
 
-      const answers = await compose(ctx, candidate, evidence)
+      const answers = await compose(ctx, candidate, evidence, opts.model)
       if (!answers) {
         // No model, or the model would not answer. Submitting anyway means
         // inventing findings about a property, which is the one thing this
@@ -238,20 +249,20 @@ Hard rules:
 - No preamble, no sign-off, no markdown headers. Just the answer.`
 
 async function compose(
-  ctx: AgentContext, project: Project, ev: Evidence,
+  ctx: AgentContext, project: Project, ev: Evidence, model: string,
 ): Promise<{ questionId: string; answer: string }[] | null> {
   const evidence = digest(ev)
   const answers: { questionId: string; answer: string }[] = []
 
   for (const q of project.questions) {
     if (q.type === 'rating') {
-      const n = await askRating(ctx, project, evidence, q)
+      const n = await askRating(ctx, project, evidence, q, model)
       answers.push({ questionId: q.id, answer: String(n) })
       continue
     }
 
     if (q.type === 'multiple_choice' || q.type === 'multiselect') {
-      const picked = await askChoice(ctx, project, evidence, q)
+      const picked = await askChoice(ctx, project, evidence, q, model)
       if (!picked) return null
       answers.push({ questionId: q.id, answer: picked })
       continue
@@ -269,6 +280,7 @@ QUESTION: ${q.text}
 
 Answer in 2-5 sentences. Name at least one concrete detail from the evidence.`,
       timeoutMs: 60_000,
+      model,
     })
     // A freeform answer is the part that is graded. Without a model there is
     // no honest answer to give, so the whole review is abandoned.
@@ -280,12 +292,13 @@ Answer in 2-5 sentences. Name at least one concrete detail from the evidence.`,
 }
 
 async function askRating(
-  ctx: AgentContext, project: Project, evidence: string, q: Question,
+  ctx: AgentContext, project: Project, evidence: string, q: Question, model: string,
 ): Promise<number> {
   const a = await ctx.reason({
     system: SYSTEM,
     user: `Property: ${project.propertyUrl}\n\nEVIDENCE:\n${evidence}\n\nQUESTION: ${q.text}\n\nReply with ONLY an integer 1-10. 1-3 poor, 4-6 adequate, 7-8 good, 9-10 excellent.`,
     timeoutMs: 30_000,
+    model,
   })
   const n = Number(/\d+/.exec(a ?? '')?.[0])
   // A neutral 5 is the honest default when the model cannot answer: ratings are
@@ -295,7 +308,7 @@ async function askRating(
 }
 
 async function askChoice(
-  ctx: AgentContext, project: Project, evidence: string, q: Question,
+  ctx: AgentContext, project: Project, evidence: string, q: Question, model: string,
 ): Promise<string | null> {
   const choices = q.choices ?? []
   if (choices.length === 0) return null
@@ -307,6 +320,7 @@ async function askChoice(
         ? 'Reply with the numbers of every option the evidence supports, comma-separated. Pick none that the evidence does not support.'
         : 'Reply with ONLY the number of the single best option.'}`,
     timeoutMs: 30_000,
+    model,
   })
   if (!a) return null
 
