@@ -68,6 +68,8 @@ const CHALLENGE_BUDGET_MS = 2_000
 export function askbotsCapability(opts: AskBotsOptions): Capability {
   let nextEligibleAt = 0
   let done: number[] = []
+  /** Last idle reason logged, so a standing condition is reported once. */
+  let quietReason = ''
   /** Projects answered or permanently refused this process; never retried. */
   const seen = new Set<string>()
 
@@ -91,9 +93,20 @@ export function askbotsCapability(opts: AskBotsOptions): Capability {
       })
 
       if (!candidate) {
+        // Say WHY there is nothing to do. A capability that idles silently is
+        // indistinguishable from one that is broken, and the difference costs
+        // real time to work out from the outside.
+        const why = projects.length === 0
+          ? 'no assignments available'
+          : `${projects.length} project(s) listed, none reviewable`
+        if (why !== quietReason) {
+          ctx.log(`askbots: idle — ${why}`)
+          quietReason = why
+        }
         nextEligibleAt = Date.now() + opts.minIntervalMs
         return { kind: 'idle' }
       }
+      quietReason = ''
 
       const id = idOf(candidate)!
       seen.add(id)
