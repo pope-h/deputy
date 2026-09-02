@@ -4,3 +4,4 @@ dist/
 .env.local
 data/*.json
 !data/.gitkeep
+.deputy-wallet.key
