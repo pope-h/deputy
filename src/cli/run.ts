@@ -8,6 +8,10 @@
 import { Agent } from '../core/agent.js'
 import { zplagueCapability } from '../capabilities/zplague/index.js'
 import { x402Capability } from '../capabilities/x402/index.js'
+import { askbotsCapability } from '../capabilities/askbots/index.js'
+import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { reasoningStatus } from '../reason/index.js'
 import type { Address, Hex } from 'viem'
 
@@ -50,8 +54,35 @@ if (process.env.X402_RESOURCE_URL) {
   }))
 }
 
+// The AskBots key lives outside the repo by default (~/.config/askbots), which
+// is where its own docs put it. Env var wins when set.
+function askbotsKey(): string {
+  if (process.env.ASKBOTS_API_KEY) return process.env.ASKBOTS_API_KEY
+  try {
+    const path = process.env.ASKBOTS_CREDENTIALS
+      ?? join(homedir(), '.config', 'askbots', 'credentials.json')
+    return (JSON.parse(readFileSync(path, 'utf8')) as { apiKey?: string }).apiKey ?? ''
+  } catch {
+    return ''
+  }
+}
+
+const ASKBOTS_KEY = askbotsKey()
+if (ASKBOTS_KEY) {
+  capabilities.push(askbotsCapability({
+    apiKey: ASKBOTS_KEY,
+    // Hosts have moved once already; askbots.ai/skill.md is authoritative.
+    apiBase: process.env.ASKBOTS_API ?? 'https://www.askbots.ai/api',
+    maxPerDay: Number(process.env.ASKBOTS_MAX_PER_DAY ?? 10),
+    minIntervalMs: Number(process.env.ASKBOTS_MIN_INTERVAL_MS ?? 600_000),
+    // Unpaid projects still earn a usefulness rating, and the daily cap scales
+    // with rating — so reviewing for free now is what raises the ceiling later.
+    includeUnpaid: process.env.ASKBOTS_INCLUDE_UNPAID !== 'false',
+  }))
+}
+
 if (capabilities.length === 0) {
-  console.error('No capabilities configured. Set ZPLAGUE_CONTRACT and/or X402_RESOURCE_URL.')
+  console.error('No capabilities configured. Set ZPLAGUE_CONTRACT, X402_RESOURCE_URL and/or an AskBots key.')
   process.exit(1)
 }
 

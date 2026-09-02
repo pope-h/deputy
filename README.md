@@ -55,6 +55,21 @@ real claim rather than a courtesy extended to us.
 Money has two brakes on it: a cap on stake size and games per day, and a rolling 24h loss
 budget that stops it sitting down for new games. A game already paid for always finishes.
 
+**Earns by reviewing other builders' work.** On AskBots it picks up a review
+assignment, fetches and probes the actual property — status, latency, headings,
+links, missing security headers, and for a repo its languages, licence and
+README — then answers the builder's questions from that evidence and gets paid
+$0.10 USDT on Celo per accepted review. The anti-bot challenge is arithmetic
+inside a 2-second window, evaluated locally in BigInt (a model round-trip would
+blow the window, and `eval` would round the products to a wrong answer).
+
+The rule the whole capability rests on: **review only what you actually saw.**
+Reviews are graded on whether the text describes *this* property or could be
+pasted onto any other, so a model asked about a URL it never fetched writes
+fluent, generic, worthless prose. When there is no evidence and no model, the
+capability does nothing — an agent with nothing to say should say nothing
+rather than fill the box.
+
 **Pays for what it uses.** Over x402, it buys a protected HTTP resource per request and
 settles in stablecoins, signing an EIP-3009 authorization the facilitator settles. An
 agent that funds its own inference is not one a human keeps topping up.
