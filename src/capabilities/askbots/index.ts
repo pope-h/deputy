@@ -63,7 +63,16 @@ interface Project {
   questions: Question[]
 }
 
-const CHALLENGE_BUDGET_MS = 2_000
+/**
+ * HTTP timeout for the challenge answer.
+ *
+ * NOT the server's 2s answer deadline. That deadline is the server's to
+ * enforce; applying it as a client-side abort guarantees failure whenever the
+ * round trip alone exceeds it, which from outside the datacentre it routinely
+ * does. The answer is computed locally in microseconds before the request is
+ * sent, so the only thing this timeout protects against is a hung socket.
+ */
+const CHALLENGE_HTTP_TIMEOUT_MS = 15_000
 
 export function askbotsCapability(opts: AskBotsOptions): Capability {
   let nextEligibleAt = 0
@@ -128,7 +137,18 @@ export function askbotsCapability(opts: AskBotsOptions): Capability {
         return { kind: 'failed', detail: `review rejected (${submitted.flags.join(', ') || submitted.rejected})` }
       }
 
-      const paid = await solveChallenge(opts, id, submitted)
+      // Past this point the review CLEARED the quality gate — a challenge is
+      // only issued after it does. Everything that can still go wrong is
+      // retryable, and the docs say so: submit again and you get a new
+      // challenge. So release the project rather than burning it for the life
+      // of the process over a slow round trip.
+      let paid: string
+      try {
+        paid = await solveChallenge(opts, id, submitted)
+      } catch (err) {
+        seen.delete(id)
+        throw err
+      }
       done.push(Date.now())
       return { kind: 'acted', detail: paid }
     },
@@ -182,20 +202,22 @@ async function solveChallenge(
   const answer = evaluateArithmetic(ch.prompt)
   if (answer === null) return `challenge not understood: ${ch.prompt}`
 
+  const t0 = Date.now()
   const res = await fetch(`${opts.apiBase}/projects/${projectId}/verify-challenge`, {
     method: 'POST', headers: auth(opts),
     body: JSON.stringify({ challengeId: ch.challengeId, answer }),
-    signal: AbortSignal.timeout(ch.timeoutMs ?? CHALLENGE_BUDGET_MS),
+    signal: AbortSignal.timeout(CHALLENGE_HTTP_TIMEOUT_MS),
   })
   const body = await res.json().catch(() => ({})) as
     { passed?: boolean; paid?: boolean; payout?: string; txHash?: string; error?: string }
 
-  if (!body.passed) return `challenge failed: ${body.error ?? `HTTP ${res.status}`}`
+  const rtt = Date.now() - t0
+  if (!body.passed) return `challenge failed after ${rtt}ms: ${body.error ?? `HTTP ${res.status}`}`
   // A 200 is not a payout: once a project's budget is spent it stays open for
   // unpaid judging, which still earns rating.
   return body.paid
-    ? `review accepted, paid ${body.payout ?? '0.10'} USDT (${body.txHash ?? 'no hash'})`
-    : 'review accepted (unpaid — budget spent; earns rating)'
+    ? `review accepted in ${rtt}ms, paid ${body.payout ?? '0.10'} USDT (${body.txHash ?? 'no hash'})`
+    : `review accepted in ${rtt}ms (unpaid — budget spent; earns rating)`
 }
 
 /**
