@@ -33,11 +33,16 @@ services:
       # ~0.55 CELO, dominated by the ZK role commitment.
       MIN_GAS_WEI: ${MIN_GAS_WEI:-500000000000000000}
       ATTRIBUTION_TAG: ${ATTRIBUTION_TAG:-}
+      # Set to a stablecoin address to pay gas in it (CIP-64) instead of CELO,
+      # so the wallet needs only one asset. The gas floor follows it.
+      FEE_CURRENCY_ADDRESS: ${FEE_CURRENCY_ADDRESS:-}
 
       # ── Reasoning ──
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-claude-opus-5}
       LLM_TIMEOUT_MS: ${LLM_TIMEOUT_MS:-8000}
+      LLM_EFFORT: ${LLM_EFFORT:-low}
+      LLM_MAX_CONSECUTIVE_FAILURES: ${LLM_MAX_CONSECUTIVE_FAILURES:-3}
 
       # ── Capability: zplague ──
       ZPLAGUE_CONTRACT: "0xe157fD2564246Afa41cfAFaDA01a9A6f3e082710"
@@ -63,6 +68,17 @@ services:
       ASKBOTS_MODEL: ${ASKBOTS_MODEL:-claude-haiku-4-5-20251001}
       ASKBOTS_MAX_PER_DAY: ${ASKBOTS_MAX_PER_DAY:-10}
       ASKBOTS_MIN_INTERVAL_MS: ${ASKBOTS_MIN_INTERVAL_MS:-600000}
+      # Projects whose paid budget is spent still earn a usefulness rating, and
+      # the daily cap scales with rating. Set false to skip them.
+      ASKBOTS_INCLUDE_UNPAID: ${ASKBOTS_INCLUDE_UNPAID:-true}
+
+      # ── Capability: x402 ──
+      # Unset X402_RESOURCE_URL and the capability is not loaded. Named here so
+      # it CAN be switched on from .env — without these lines it would be
+      # unreachable in the container no matter what .env said.
+      X402_RESOURCE_URL: ${X402_RESOURCE_URL:-}
+      X402_MAX_PRICE: ${X402_MAX_PRICE:-10000}
+      X402_MIN_INTERVAL_MS: ${X402_MIN_INTERVAL_MS:-300000}
 
     volumes:
       - deputydata:/app/data
