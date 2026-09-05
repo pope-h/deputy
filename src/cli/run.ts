@@ -75,7 +75,7 @@ if (ASKBOTS_KEY) {
   capabilities.push(askbotsCapability({
     apiKey: ASKBOTS_KEY,
     // Hosts have moved once already; askbots.ai/skill.md is authoritative.
-    apiBase: process.env.ASKBOTS_API ?? 'https://www.askbots.ai/api',
+    apiBase: process.env.ASKBOTS_API ?? 'https://askbots.ai/api',
     maxPerDay: Number(process.env.ASKBOTS_MAX_PER_DAY ?? 10),
     minIntervalMs: Number(process.env.ASKBOTS_MIN_INTERVAL_MS ?? 600_000),
     // Unpaid projects still earn a usefulness rating, and the daily cap scales

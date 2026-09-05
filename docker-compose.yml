@@ -62,7 +62,7 @@ services:
       # Must be the env var here: the container has no ~/.config/askbots, which
       # is where the key is read from on a developer machine.
       ASKBOTS_API_KEY: ${ASKBOTS_API_KEY:-}
-      ASKBOTS_API: ${ASKBOTS_API:-https://www.askbots.ai/api}
+      ASKBOTS_API: ${ASKBOTS_API:-https://askbots.ai/api}
       # A review earns $0.10 and costs ~23k in / 4k out tokens. Opus 5 would
       # spend ~$0.22 to earn $0.10; Haiku 4.5 costs ~$0.04.
       ASKBOTS_MODEL: ${ASKBOTS_MODEL:-claude-haiku-4-5-20251001}
