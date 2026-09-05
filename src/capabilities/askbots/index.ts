@@ -74,7 +74,62 @@ interface Project {
  */
 const CHALLENGE_HTTP_TIMEOUT_MS = 15_000
 
-export function askbotsCapability(opts: AskBotsOptions): Capability {
+/**
+ * Where the canonical base URL is published, and the only domain family the
+ * agent will follow it to.
+ *
+ * The host has moved twice in a week — a Netlify preview, then www, then the
+ * apex — each time by publishing a new Base URL in skill.md and leaving the old
+ * host serving a deprecation notice. Left alone, the day the old host finally
+ * stops answering the capability fails every ten minutes forever while the game
+ * capability keeps spending gas. Nothing would tell anyone.
+ *
+ * So it follows the move — but only inside askbots.ai. The document naming the
+ * new host is fetched over the network, and this agent sends an API key to
+ * whatever that document says; a redirect to an attacker's domain would hand
+ * the key over. The skill file's own rule is that the key goes to askbots.ai
+ * and nowhere else, so that rule is enforced here rather than trusted.
+ */
+const SKILL_URL = 'https://askbots.ai/skill.md'
+const TRUSTED_DOMAIN = 'askbots.ai'
+/** Don't re-read the skill file more than this often. */
+const REDISCOVER_MIN_INTERVAL_MS = 30 * 60 * 1000
+
+/**
+ * Read the current base URL from the published skill file.
+ * Returns null when it cannot be read, parsed, or trusted.
+ */
+async function discoverBaseUrl(): Promise<string | null> {
+  const res = await fetch(SKILL_URL, { signal: AbortSignal.timeout(20_000) }).catch(() => null)
+  if (!res?.ok) return null
+
+  const found = /\*\*Base URL:\*\*\s*`([^`]+)`/.exec(await res.text())?.[1]
+  if (!found) return null
+
+  let url: URL
+  try { url = new URL(found) } catch { return null }
+
+  if (url.protocol !== 'https:') {
+    console.warn(`[askbots] refusing base URL ${found} — not https`)
+    return null
+  }
+  if (url.hostname !== TRUSTED_DOMAIN && !url.hostname.endsWith(`.${TRUSTED_DOMAIN}`)) {
+    // Loud, because this is either a compromise or a genuine migration off the
+    // domain — and a human has to decide which.
+    console.error(
+      `[askbots] REFUSING to follow base URL to ${url.hostname}: outside ${TRUSTED_DOMAIN}. ` +
+      'The API key is not being sent there. If this move is genuine, set ASKBOTS_API by hand.',
+    )
+    return null
+  }
+  return found.replace(/\/$/, '')
+}
+
+export function askbotsCapability(options: AskBotsOptions): Capability {
+  // A mutable copy: the base URL is the one setting that can legitimately
+  // change under a running agent.
+  const opts = { ...options }
+  let lastRediscoverAt = 0
   let nextEligibleAt = 0
   let done: number[] = []
   /** Last idle reason logged, so a standing condition is reported once. */
@@ -93,7 +148,27 @@ export function askbotsCapability(opts: AskBotsOptions): Capability {
     },
 
     async tick(ctx: AgentContext): Promise<CapabilityOutcome> {
-      const projects = await list(opts)
+      let listed: { projects: Project[]; notice?: string }
+      try {
+        listed = await list(opts)
+      } catch (err) {
+        // A dead host is exactly what a completed migration looks like from
+        // here, so check the published base URL before calling it an outage.
+        const moved = await maybeFollowMove(ctx, opts, () => lastRediscoverAt, t => { lastRediscoverAt = t })
+        if (!moved) throw err
+        listed = await list(opts)
+      }
+
+      // The old host announces its own retirement while still serving. Acting
+      // on that now means the migration is a log line, not an outage later.
+      if (listed.notice) {
+        ctx.log(`askbots: ${listed.notice}`)
+        if (/deprecat|no longer|moved|new host|base url/i.test(listed.notice)) {
+          const moved = await maybeFollowMove(ctx, opts, () => lastRediscoverAt, t => { lastRediscoverAt = t })
+          if (moved) listed = await list(opts)
+        }
+      }
+      const projects = listed.projects
       const candidate = projects.find(p => {
         const id = idOf(p)
         if (!id || seen.has(id)) return false
@@ -165,13 +240,11 @@ function auth(opts: AskBotsOptions): Record<string, string> {
   return { Authorization: `Bearer ${opts.apiKey}`, 'Content-Type': 'application/json' }
 }
 
-async function list(opts: AskBotsOptions): Promise<Project[]> {
+async function list(opts: AskBotsOptions): Promise<{ projects: Project[]; notice?: string }> {
   const res = await fetch(`${opts.apiBase}/projects`, { headers: auth(opts) })
   if (!res.ok) throw new Error(`projects: HTTP ${res.status}`)
   const body = await res.json() as { projects?: Project[]; notice?: string }
-  // The host has moved once already and says so in-band rather than breaking.
-  if (body.notice) console.warn(`[askbots] ${body.notice}`)
-  return body.projects ?? []
+  return { projects: body.projects ?? [], notice: body.notice }
 }
 
 interface Challenge { challengeId: string; prompt: string; timeoutMs?: number }
@@ -366,4 +439,25 @@ async function askChoice(
   if (q.type === 'multiple_choice') return choices[nums[0] - 1]
   const unique = [...new Set(nums)].map(n => choices[n - 1])
   return JSON.stringify(unique)
+}
+
+/**
+ * Re-read the published base URL and adopt it if it has changed.
+ * Returns true when the agent was re-pointed.
+ */
+async function maybeFollowMove(
+  ctx: AgentContext,
+  opts: AskBotsOptions & { apiBase: string },
+  getLast: () => number,
+  setLast: (t: number) => void,
+): Promise<boolean> {
+  if (Date.now() - getLast() < REDISCOVER_MIN_INTERVAL_MS) return false
+  setLast(Date.now())
+
+  const discovered = await discoverBaseUrl()
+  if (!discovered || discovered === opts.apiBase) return false
+
+  ctx.log(`askbots: base URL moved ${opts.apiBase} -> ${discovered} (per ${SKILL_URL})`)
+  opts.apiBase = discovered
+  return true
 }
